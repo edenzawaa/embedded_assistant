@@ -55,6 +55,8 @@ def upload_audio():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+upload_audio();
+
 def speech_to_text(file_name, lang):
     recognizer = sr.Recognizer()
     with sr.AudioFile(file_name) as source:
