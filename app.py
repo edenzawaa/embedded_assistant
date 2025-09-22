@@ -102,6 +102,7 @@ def get_reply_audio():
     return Response(generate_and_cleanup(), mimetype="audio/wav")
 
 if __name__ == '__main__':
-    port = 8888
+    port = int(os.environ.get('PORT', 10000))  # Use Render's provided port
     print(f'Listening at {port}')
     app.run(host='0.0.0.0', port=port, threaded=True)
+
