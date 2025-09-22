@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: flask-voice-assistant
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python app.py
+    envVars:
+      - key: GEMINI_API_KEY
+        value: AIzaSyB-P5oat3s6LryujWlE3kwVis2rEFggklQ
