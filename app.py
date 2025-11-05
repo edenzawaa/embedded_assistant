@@ -90,17 +90,36 @@ def text_to_speech(text, filename):
 
 @app.route('/getReplyAudio')
 def get_reply_audio():
+    # Wait until response.wav is ready (up to 10 seconds)
+    wait_time = 0
+    max_wait = 10
+    while not os.path.exists(RESPONSE_WAV) and wait_time < max_wait:
+        print(f"Waiting for {RESPONSE_WAV}... {wait_time}s")
+        time.sleep(0.5)
+        wait_time += 0.5
+
+    if not os.path.exists(RESPONSE_WAV):
+        print("Error: response.wav not found after waiting.")
+        return jsonify({"error": "Audio file not ready"}), 404
+
     def generate_and_cleanup():
         try:
             with open(RESPONSE_WAV, "rb") as f:
                 while chunk := f.read(8192):
                     yield chunk
         finally:
-            for f in [RESPONSE_WAV, RESPONSE_MP3, WAV_FILE]:
-                if os.path.exists(f):
-                    os.remove(f)
+            # Cleanup temporary files after streaming
+            for fpath in [RESPONSE_WAV, RESPONSE_MP3, WAV_FILE]:
+                if os.path.exists(fpath):
+                    try:
+                        os.remove(fpath)
+                        print(f"Removed: {fpath}")
+                    except Exception as e:
+                        print(f"Error removing {fpath}: {e}")
 
+    print("Streaming response.wav to client...")
     return Response(generate_and_cleanup(), mimetype="audio/wav")
+
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))  # Use Render's provided port
