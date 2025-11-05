@@ -40,21 +40,21 @@ def upload_audio():
         transcription = speech_to_text(WAV_FILE, lang='vi-VN')
         print(f">> Transcription done: {transcription}")
 
-        reply = query_gemini(transcription)
-        print(f">> Gemini reply: {reply}")
+        # reply = query_gemini(transcription)
+        # print(f">> Gemini reply: {reply}")
 
-        print(">> Converting reply to speech...")
-        text_to_speech(reply, RESPONSE_MP3)
-        print(">> gTTS done.")
+        # print(">> Converting reply to speech...")
+        # text_to_speech(reply, RESPONSE_MP3)
+        # print(">> gTTS done.")
 
-        print(">> Converting MP3 to WAV...")
-        AudioSegment.from_mp3(RESPONSE_MP3).export(RESPONSE_WAV, format="wav")
-        print(">> Conversion done. Returning JSON.")
+        # print(">> Converting MP3 to WAV...")
+        # AudioSegment.from_mp3(RESPONSE_MP3).export(RESPONSE_WAV, format="wav")
+        # print(">> Conversion done. Returning JSON.")
 
         return jsonify({
             'transcription': transcription,
-            'assistant_reply': reply,
-            'audio_file': RESPONSE_WAV
+            # 'assistant_reply': reply,
+            # 'audio_file': RESPONSE_WAV
         }), 200
 
     except Exception as e:
