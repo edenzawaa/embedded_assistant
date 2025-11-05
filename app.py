@@ -31,21 +31,24 @@ def test_connection():
 @app.route('/uploadAudio', methods=['POST'])
 def upload_audio():
     try:
-        # Save uploaded audio
+        print(">> Received audio upload.")
         with open(WAV_FILE, 'wb') as f:
             f.write(request.data)
+        print(">> Saved WAV file.")
 
-        # Transcribe speech to text (Vietnamese)
         transcription = speech_to_text(WAV_FILE, lang='vi-VN')
+        print(f">> Transcription done: {transcription}")
 
-        # Generate reply using Ollama
         reply = query_gemini(transcription)
+        print(f">> Gemini reply: {reply}")
 
-        # Convert reply to speech using gTTS (Vietnamese)
+        print(">> Converting reply to speech...")
         text_to_speech(reply, RESPONSE_MP3)
-    
-        # Convert MP3 to WAV for compatibility with ESP32 streaming
+        print(">> gTTS done.")
+
+        print(">> Converting MP3 to WAV...")
         AudioSegment.from_mp3(RESPONSE_MP3).export(RESPONSE_WAV, format="wav")
+        print(">> Conversion done. Returning JSON.")
 
         return jsonify({
             'transcription': transcription,
@@ -54,7 +57,9 @@ def upload_audio():
         }), 200
 
     except Exception as e:
+        print(">> ERROR in upload_audio:", e)
         return jsonify({'error': str(e)}), 500
+
 
 
 def speech_to_text(file_name, lang):
