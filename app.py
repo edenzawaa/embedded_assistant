@@ -7,6 +7,7 @@ from gtts import gTTS
 from pydub import AudioSegment
 import google.generativeai as genai
 import time
+import concurrent.futures
 
 app = Flask(__name__)
 WAV_FILE = 'recording.wav'
@@ -67,9 +68,13 @@ def speech_to_text(file_name, lang):
     with sr.AudioFile(file_name) as source:
         audio_data = recognizer.record(source)
         try:
-            text = recognizer.recognize_google(audio_data, language=lang)
-            print(f'Transcription: {text}')
-            return text
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(
+                    recognizer.recognize_google, audio_data, language=lang
+                )
+                return future.result(timeout=10)  # 10-second timeout
+        except concurrent.futures.TimeoutError:
+            return "Speech recognition timed out"
         except sr.UnknownValueError:
             return "Speech Recognition could not understand audio"
         except sr.RequestError as e:
