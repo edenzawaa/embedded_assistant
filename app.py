@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 from gtts import gTTS
 from pydub import AudioSegment
 import google.generativeai as genai
+import time
 
 app = Flask(__name__)
 WAV_FILE = 'recording.wav'
