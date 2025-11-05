@@ -8,6 +8,8 @@ from pydub import AudioSegment
 import google.generativeai as genai
 import time
 import concurrent.futures
+import threading
+import traceback
 
 app = Flask(__name__)
 WAV_FILE = 'recording.wav'
@@ -22,44 +24,54 @@ genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 # Pick a Gemini model
 gemini_model = genai.GenerativeModel("gemini-2.5-flash")
 
-@app.route('/testConnection', methods=['GET'])
-def test_connection():
-    try:
-        return jsonify({'status': 'Server is up'}), 200
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-        
 @app.route('/uploadAudio', methods=['POST'])
 def upload_audio():
     try:
-        print(">> Received audio upload.")
+        print(">> [UPLOAD] Received audio upload.")
+
+        # Save uploaded audio
         with open(WAV_FILE, 'wb') as f:
             f.write(request.data)
-        print(">> Saved WAV file.")
+        print(">> [UPLOAD] Saved WAV file.")
 
-        transcription = speech_to_text(WAV_FILE, lang='vi-VN')
-        print(f">> Transcription done: {transcription}")
+        # Start background processing so we can reply immediately
+        threading.Thread(target=process_audio_and_generate_reply).start()
 
-        # reply = query_gemini(transcription)
-        # print(f">> Gemini reply: {reply}")
-
-        # print(">> Converting reply to speech...")
-        # text_to_speech(reply, RESPONSE_MP3)
-        # print(">> gTTS done.")
-
-        # print(">> Converting MP3 to WAV...")
-        # AudioSegment.from_mp3(RESPONSE_MP3).export(RESPONSE_WAV, format="wav")
-        # print(">> Conversion done. Returning JSON.")
-
-        return jsonify({
-            'transcription': transcription,
-            # 'assistant_reply': reply,
-            # 'audio_file': RESPONSE_WAV
-        }), 200
+        # Immediate response to ESP32 — avoids long blocking
+        return jsonify({'status': 'processing'}), 202
 
     except Exception as e:
-        print(">> ERROR in upload_audio:", e)
+        print(">> [ERROR] upload_audio:", e)
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
+
+
+def process_audio_and_generate_reply():
+    """Runs in background: transcribe, query Gemini, TTS, and export WAV."""
+    try:
+        print(">> [THREAD] Starting background processing...")
+
+        # Step 1. Transcribe
+        transcription = speech_to_text(WAV_FILE, lang='vi-VN')
+        print(f">> [THREAD] Transcription: {transcription}")
+
+        # Step 2. Query Gemini
+        reply = query_gemini(transcription)
+        print(f">> [THREAD] Gemini reply: {reply}")
+
+        # Step 3. Convert reply to MP3
+        text_to_speech(reply, RESPONSE_MP3)
+        print(">> [THREAD] gTTS done, converting to WAV...")
+
+        # Step 4. Convert MP3 → WAV
+        AudioSegment.from_mp3(RESPONSE_MP3).export(RESPONSE_WAV, format="wav")
+        print(">> [THREAD] Conversion to WAV complete.")
+
+        print(">> [THREAD] Processing complete — ready for client fetch!")
+
+    except Exception as e:
+        print(">> [ERROR] process_audio_and_generate_reply:", e)
+        traceback.print_exc()
 
 
 
