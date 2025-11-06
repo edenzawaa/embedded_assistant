@@ -1,13 +1,9 @@
 from flask import Flask, request, jsonify, Response
-import os
-import speech_recognition as sr
-from dotenv import load_dotenv
+import os, time, threading
 from gtts import gTTS
 from pydub import AudioSegment
 import google.generativeai as genai
-import time
-import concurrent.futures
-import threading
+from dotenv import load_dotenv
 
 app = Flask(__name__)
 
@@ -16,154 +12,96 @@ RESPONSE_MP3 = 'response.mp3'
 RESPONSE_WAV = 'response.wav'
 
 load_dotenv()
-
-# Configure Gemini API key
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-gemini_model = genai.GenerativeModel("gemini-2.5-flash")
+model = genai.GenerativeModel("gemini-1.5-flash")
+
+# --- GLOBAL STATUS FLAGS ---
+status = {"processing": False, "ready": False, "error": None}
+
+# ----------------------------
 
 
-@app.route('/uploadAudio', methods=['POST'])
+@app.route("/uploadAudio", methods=["POST"])
 def upload_audio():
+    global status
     try:
-        print(">> Received audio upload.")
-        with open(WAV_FILE, 'wb') as f:
-            f.write(request.data)
-        print(">> Saved WAV file.")
+        file = request.files["audio"]
+        file.save(WAV_FILE)
+        print(">> Audio received:", WAV_FILE)
 
-        # Process in background
-        threading.Thread(target=process_audio).start()
+        # Reset flags before starting a new thread
+        status = {"processing": True, "ready": False, "error": None}
 
-        return jsonify({
-            'status': 'processing',
-            'message': 'Audio received, processing in background...'
-        }), 200
+        # Process in a background thread
+        threading.Thread(target=process_audio, daemon=True).start()
+
+        return jsonify({"status": "processing"}), 200
 
     except Exception as e:
-        print(">> ERROR in upload_audio:", e)
-        return jsonify({'error': str(e)}), 500
+        status = {"processing": False, "ready": False, "error": str(e)}
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/checkStatus", methods=["GET"])
+def check_status():
+    """ESP32 calls this periodically to check if reply is ready."""
+    return jsonify(status)
+
+
+@app.route("/getReplyAudio", methods=["GET"])
+def get_reply_audio():
+    """ESP32 calls this once /checkStatus says ready=True."""
+    global status
+    try:
+        if not os.path.exists(RESPONSE_MP3):
+            return jsonify({"error": "No audio ready"}), 404
+
+        def generate():
+            with open(RESPONSE_MP3, "rb") as f:
+                while chunk := f.read(8192):
+                    yield chunk
+            print(">> Completed playback stream.")
+
+        response = Response(generate(), mimetype="audio/mpeg")
+
+        @response.call_on_close
+        def cleanup():
+            for fpath in [RESPONSE_MP3, WAV_FILE]:
+                if os.path.exists(fpath):
+                    os.remove(fpath)
+                    print(f">> Removed: {fpath}")
+            status = {"processing": False, "ready": False, "error": None}
+
+        return response
+
+    except Exception as e:
+        status = {"processing": False, "ready": False, "error": str(e)}
+        return jsonify({"error": str(e)}), 500
 
 
 def process_audio():
+    global status
     try:
-        print(">> Transcribing audio...")
-        transcription = speech_to_text(WAV_FILE, lang='vi-VN')
-        print(f">> Transcription result: '{transcription}'")
+        print(">> Sending audio to Gemini...")
+        with open(WAV_FILE, "rb") as f:
+            audio_data = f.read()
 
-        # Fallback if no speech detected
-        if not transcription.strip() or "could not" in transcription.lower() or "error" in transcription.lower():
-            print(">> No valid transcription detected, using fallback.")
-            reply = "Xin lỗi, tôi không nghe rõ. Bạn có thể nói lại không?"
-        else:
-            reply = query_gemini(transcription)
+        # Directly transcribe + respond
+        result = model.generate_content([
+            {"mime_type": "audio/wav", "data": audio_data},
+            {"text": "Nghe nội dung âm thanh, hiểu người dùng nói gì và phản hồi ngắn gọn bằng tiếng Việt."}
+        ])
 
-        print(f">> Gemini reply: {reply}")
+        reply_text = result.text.strip() if result.text else "Xin lỗi, tôi không nghe rõ."
+        print(f">> Gemini reply: {reply_text}")
 
-        print(">> Generating TTS...")
-        text_to_speech(reply, RESPONSE_MP3)
-        AudioSegment.from_mp3(RESPONSE_MP3).export(RESPONSE_WAV, format="wav")
-        print(">> Response audio ready!")
+        # Generate TTS
+        print(">> Generating voice reply...")
+        gTTS(reply_text, lang="vi").save(RESPONSE_MP3)
+
+        status = {"processing": False, "ready": True, "error": None}
+        print(">> Processing complete. Audio ready.")
 
     except Exception as e:
+        status = {"processing": False, "ready": False, "error": str(e)}
         print(">> ERROR in process_audio:", e)
-        # Still generate a fallback audio
-        fallback = "Xin lỗi, đã xảy ra lỗi khi xử lý âm thanh."
-        text_to_speech(fallback, RESPONSE_MP3)
-        AudioSegment.from_mp3(RESPONSE_MP3).export(RESPONSE_WAV, format="wav")
-
-
-def speech_to_text(file_name, lang):
-    recognizer = sr.Recognizer()
-    with sr.AudioFile(file_name) as source:
-        audio_data = recognizer.record(source)
-        try:
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                future = executor.submit(
-                    recognizer.recognize_google, audio_data, language=lang
-                )
-                return future.result(timeout=10)
-        except concurrent.futures.TimeoutError:
-            return "Speech recognition timed out"
-        except sr.UnknownValueError:
-            return ""
-        except sr.RequestError as e:
-            return f"Speech recognition error: {e}"
-
-
-def query_gemini(prompt: str) -> str:
-    try:
-        full_prompt = (
-            f"Người dùng nói: '{prompt}'. "
-            "Vui lòng trả lời bằng tiếng Việt, ngắn gọn dưới 50 từ."
-        )
-        response = gemini_model.generate_content(full_prompt)
-        return response.text.strip()
-    except Exception as e:
-        print("Gemini error:", e)
-        return "Xin lỗi, đã xảy ra lỗi khi truy vấn mô hình."
-
-
-def text_to_speech(text, filename):
-    tts = gTTS(text=text, lang='vi')
-    tts.save(filename)
-
-
-@app.route('/getReplyAudio')
-def get_reply_audio():
-    max_wait = 15  # allow up to 15s for processing
-    poll_interval = 0.5
-    waited = 0.0
-
-    print(f">> Client requested {RESPONSE_WAV}")
-    while not os.path.exists(RESPONSE_WAV) and waited < max_wait:
-        print(f"  Waiting... ({waited:.1f}s/{max_wait}s)")
-        time.sleep(poll_interval)
-        waited += poll_interval
-
-    # If still no file, respond gracefully
-    if not os.path.exists(RESPONSE_WAV):
-        print(">> No response.wav found — sending short fallback tone.")
-        # Return a short 500 ms silent WAV so ESP32 still plays something
-        import io, wave
-        buf = io.BytesIO()
-        with wave.open(buf, "wb") as wf:
-            wf.setnchannels(1)
-            wf.setsampwidth(2)
-            wf.setframerate(16000)
-            wf.writeframes(b"\x00" * 16000)  # 0.5s silence
-        buf.seek(0)
-        return Response(buf, mimetype="audio/wav")
-
-    print(">> Streaming response.wav to client...")
-
-    def generate():
-        with open(RESPONSE_WAV, "rb") as f:
-            while True:
-                chunk = f.read(8192)
-                if not chunk:
-                    break
-                yield chunk
-        print(">> Completed playback stream.")
-        yield b""  # explicitly mark end-of-stream
-
-    response = Response(generate(), mimetype="audio/wav")
-
-    @response.call_on_close
-    def cleanup():
-        print(">> Stream closed, cleaning up temporary files...")
-        for fpath in [RESPONSE_WAV, RESPONSE_MP3, WAV_FILE]:
-            if os.path.exists(fpath):
-                try:
-                    os.remove(fpath)
-                    print(f">> Removed: {fpath}")
-                except Exception as e:
-                    print(f">> Error removing {fpath}: {e}")
-
-    return response
-
-
-
-
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 10000))
-    print(f'Listening at port {port}')
-    app.run(host='0.0.0.0', port=port, threaded=True)
