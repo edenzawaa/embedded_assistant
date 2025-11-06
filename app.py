@@ -48,7 +48,13 @@ def upload_audio():
 @app.route("/checkStatus", methods=["GET"])
 def check_status():
     with status_lock:
-        return jsonify(dict(status))
+        if status["ready"]:
+            return jsonify({"status": "ready"})
+        elif status["processing"]:
+            return jsonify({"status": "processing"})
+        else:
+            return jsonify({"status": "error", "error": status["error"]})
+
 
 
 @app.route("/getReplyAudio", methods=["GET"])
