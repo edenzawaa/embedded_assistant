@@ -25,20 +25,22 @@ status = {"processing": False, "ready": False, "error": None}
 def upload_audio():
     global status
     try:
-        file = request.files["audio"]
-        file.save(WAV_FILE)
-        print(">> Audio received:", WAV_FILE)
-
-        # Reset flags
+        # Use raw data
+        data = request.data
+        if not data:
+            raise ValueError("No data received")
+        
+        with open(WAV_FILE, "wb") as f:
+            f.write(data)
+        
         status = {"processing": True, "ready": False, "error": None}
-
-        # Background processing
         threading.Thread(target=process_audio, daemon=True).start()
         return jsonify({"status": "processing"}), 200
 
     except Exception as e:
         status = {"processing": False, "ready": False, "error": str(e)}
         return jsonify({"error": str(e)}), 500
+
 
 
 @app.route("/checkStatus", methods=["GET"])
