@@ -1,7 +1,6 @@
 from flask import Flask, request, jsonify, Response
 import os
 import speech_recognition as sr
-import requests
 from dotenv import load_dotenv
 from gtts import gTTS
 from pydub import AudioSegment
@@ -9,20 +8,19 @@ import google.generativeai as genai
 import time
 import concurrent.futures
 import threading
-import traceback
 
 app = Flask(__name__)
+
 WAV_FILE = 'recording.wav'
 RESPONSE_MP3 = 'response.mp3'
 RESPONSE_WAV = 'response.wav'
 
 load_dotenv()
 
-# Configure your Gemini / Generative AI API Key
+# Configure Gemini API key
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-
-# Pick a Gemini model
 gemini_model = genai.GenerativeModel("gemini-2.5-flash")
+
 
 @app.route('/uploadAudio', methods=['POST'])
 def upload_audio():
@@ -32,7 +30,7 @@ def upload_audio():
             f.write(request.data)
         print(">> Saved WAV file.")
 
-        # Respond immediately so ESP32 knows upload succeeded
+        # Process in background
         threading.Thread(target=process_audio).start()
 
         return jsonify({
@@ -47,20 +45,31 @@ def upload_audio():
 
 def process_audio():
     try:
-        print(">> Transcribing...")
+        print(">> Transcribing audio...")
         transcription = speech_to_text(WAV_FILE, lang='vi-VN')
-        print(f">> Transcription done: {transcription}")
+        print(f">> Transcription result: '{transcription}'")
 
-        reply = query_gemini(transcription)
+        # Fallback if no speech detected
+        if not transcription.strip() or "could not" in transcription.lower() or "error" in transcription.lower():
+            print(">> No valid transcription detected, using fallback.")
+            reply = "Xin lỗi, tôi không nghe rõ. Bạn có thể nói lại không?"
+        else:
+            reply = query_gemini(transcription)
+
         print(f">> Gemini reply: {reply}")
 
-        print(">> Generating speech...")
+        print(">> Generating TTS...")
         text_to_speech(reply, RESPONSE_MP3)
-
         AudioSegment.from_mp3(RESPONSE_MP3).export(RESPONSE_WAV, format="wav")
-        print(">> Processing complete, response.wav ready.")
+        print(">> Response audio ready!")
+
     except Exception as e:
         print(">> ERROR in process_audio:", e)
+        # Still generate a fallback audio
+        fallback = "Xin lỗi, đã xảy ra lỗi khi xử lý âm thanh."
+        text_to_speech(fallback, RESPONSE_MP3)
+        AudioSegment.from_mp3(RESPONSE_MP3).export(RESPONSE_WAV, format="wav")
+
 
 def speech_to_text(file_name, lang):
     recognizer = sr.Recognizer()
@@ -71,13 +80,14 @@ def speech_to_text(file_name, lang):
                 future = executor.submit(
                     recognizer.recognize_google, audio_data, language=lang
                 )
-                return future.result(timeout=10)  # 10-second timeout
+                return future.result(timeout=10)
         except concurrent.futures.TimeoutError:
             return "Speech recognition timed out"
         except sr.UnknownValueError:
-            return "Speech Recognition could not understand audio"
+            return ""
         except sr.RequestError as e:
             return f"Speech recognition error: {e}"
+
 
 def query_gemini(prompt: str) -> str:
     try:
@@ -86,21 +96,20 @@ def query_gemini(prompt: str) -> str:
             "Vui lòng trả lời bằng tiếng Việt, ngắn gọn dưới 50 từ."
         )
         response = gemini_model.generate_content(full_prompt)
-        reply = response.text.strip()
-        print("Gemini reply:", reply)
-        return reply
+        return response.text.strip()
     except Exception as e:
         print("Gemini error:", e)
-        return "Lỗi khi truy vấn Gemini"
-    
+        return "Xin lỗi, đã xảy ra lỗi khi truy vấn mô hình."
+
+
 def text_to_speech(text, filename):
-    # Use gTTS for natural Vietnamese voice
     tts = gTTS(text=text, lang='vi')
     tts.save(filename)
 
+
 @app.route('/getReplyAudio')
 def get_reply_audio():
-    max_wait = 10  # seconds
+    max_wait = 10
     poll_interval = 0.5
     waited = 0.0
 
@@ -114,7 +123,7 @@ def get_reply_audio():
         print(">> Error: response.wav not found after waiting.")
         return jsonify({"error": "Audio file not ready"}), 404
 
-    print(">> Streaming response.wav to client...")
+    print(">> Streaming response.wav...")
 
     def generate():
         with open(RESPONSE_WAV, "rb") as f:
@@ -123,14 +132,13 @@ def get_reply_audio():
 
     response = Response(generate(), mimetype="audio/wav")
 
-    # Cleanup happens after streaming finishes
     @response.call_on_close
     def cleanup():
         for fpath in [RESPONSE_WAV, RESPONSE_MP3, WAV_FILE]:
             if os.path.exists(fpath):
                 try:
                     os.remove(fpath)
-                    print(f">> Removed: {fpath}")
+                    print(f">> Cleaned up {fpath}")
                 except Exception as e:
                     print(f">> Error removing {fpath}: {e}")
 
@@ -138,7 +146,6 @@ def get_reply_audio():
 
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 10000))  # Use Render's provided port
-    print(f'Listening at {port}')
+    port = int(os.environ.get('PORT', 10000))
+    print(f'Listening at port {port}')
     app.run(host='0.0.0.0', port=port, threaded=True)
-
