@@ -81,31 +81,17 @@ def get_reply_audio():
 def process_audio():
     global status
     try:
-        print(">> Sending audio to Gemini...")
-        with open(WAV_FILE, "rb") as f:
-            audio_data = f.read()
-
-        # Gemini transcription + reply
-        result = model.generate_content([
-            {"mime_type": "audio/wav", "data": audio_data},
-            {"text": "Nghe nội dung âm thanh, hiểu người dùng nói gì và phản hồi ngắn gọn bằng tiếng Việt."}
-        ])
-
-        reply_text = result.text.strip() if result.text else "Xin lỗi, tôi không nghe rõ."
-        print(f">> Gemini reply: {reply_text}")
-
-        # Generate MP3 first, then convert to WAV
-        tts_mp3 = "temp_response.mp3"
-        gTTS(reply_text, lang="vi").save(tts_mp3)
-        AudioSegment.from_mp3(tts_mp3).export(RESPONSE_WAV, format="wav")
-        os.remove(tts_mp3)
-
+        print(">> process_audio started")
+        reply_text = "Xin chào, đây là thử nghiệm"
+        print(">> TTS generating...")
+        gTTS(reply_text, lang="vi").save(RESPONSE_WAV.replace(".wav", ".mp3"))
+        AudioSegment.from_mp3(RESPONSE_WAV.replace(".wav", ".mp3")).export(RESPONSE_WAV, format="wav")
         status.update({"processing": False, "ready": True, "error": None})
-        print(">> Processing complete. WAV ready.")
-
+        print(">> process_audio finished")
     except Exception as e:
         status.update({"processing": False, "ready": False, "error": str(e)})
         print(">> ERROR in process_audio:", e)
+
 
 
 if __name__ == "__main__":
