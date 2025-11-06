@@ -5,7 +5,6 @@ from pydub import AudioSegment
 import google.generativeai as genai
 from dotenv import load_dotenv
 import warnings
-import threading
 
 warnings.filterwarnings("ignore", category=SyntaxWarning)
 
@@ -25,16 +24,15 @@ status = {"processing": False, "ready": False, "error": None}
 
 @app.route("/uploadAudio", methods=["POST"])
 def upload_audio():
-    global status
     try:
-        # Use raw data
         data = request.data
         if not data:
             raise ValueError("No data received")
-        
+
         with open(WAV_FILE, "wb") as f:
             f.write(data)
-        
+
+        # Update status safely
         with status_lock:
             status.update({"processing": True, "ready": False, "error": None})
 
@@ -42,9 +40,9 @@ def upload_audio():
         return jsonify({"status": "processing"}), 200
 
     except Exception as e:
-        status = {"processing": False, "ready": False, "error": str(e)}
+        with status_lock:
+            status.update({"processing": False, "ready": False, "error": str(e)})
         return jsonify({"error": str(e)}), 500
-
 
 
 @app.route("/checkStatus", methods=["GET"])
@@ -55,7 +53,6 @@ def check_status():
 
 @app.route("/getReplyAudio", methods=["GET"])
 def get_reply_audio():
-    global status
     try:
         if not os.path.exists(RESPONSE_WAV):
             return jsonify({"error": "No audio ready"}), 404
@@ -74,19 +71,19 @@ def get_reply_audio():
                 if os.path.exists(fpath):
                     os.remove(fpath)
                     print(f">> Removed: {fpath}")
+            # Update status safely
             with status_lock:
                 status.update({"processing": False, "ready": False, "error": None})
-
 
         return response
 
     except Exception as e:
-        status = {"processing": False, "ready": False, "error": str(e)}
+        with status_lock:
+            status.update({"processing": False, "ready": False, "error": str(e)})
         return jsonify({"error": str(e)}), 500
 
 
 def process_audio():
-    global status
     try:
         print(">> Sending audio to Gemini...")
 
@@ -109,7 +106,7 @@ def process_audio():
         AudioSegment.from_mp3(tts_mp3).export(RESPONSE_WAV, format="wav")
         os.remove(tts_mp3)
 
-        # Update status
+        # Update status safely
         with status_lock:
             status.update({"processing": False, "ready": True, "error": None})
             print(">> Processing complete. WAV ready.")
@@ -117,6 +114,8 @@ def process_audio():
     except Exception as e:
         with status_lock:
             status.update({"processing": False, "ready": False, "error": str(e)})
+        print(">> ERROR in process_audio:", e)
+
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
