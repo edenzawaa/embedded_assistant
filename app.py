@@ -109,7 +109,7 @@ def text_to_speech(text, filename):
 
 @app.route('/getReplyAudio')
 def get_reply_audio():
-    max_wait = 10  # seconds
+    max_wait = 15  # allow up to 15s for processing
     poll_interval = 0.5
     waited = 0.0
 
@@ -119,11 +119,21 @@ def get_reply_audio():
         time.sleep(poll_interval)
         waited += poll_interval
 
+    # If still no file, respond gracefully
     if not os.path.exists(RESPONSE_WAV):
-        print(">> Error: response.wav not found after waiting.")
-        return jsonify({"error": "Audio file not ready"}), 404
+        print(">> No response.wav found — sending short fallback tone.")
+        # Return a short 500 ms silent WAV so ESP32 still plays something
+        import io, wave
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(16000)
+            wf.writeframes(b"\x00" * 16000)  # 0.5s silence
+        buf.seek(0)
+        return Response(buf, mimetype="audio/wav")
 
-    print(">> Streaming response.wav...")
+    print(">> Streaming response.wav to client...")
 
     def generate():
         with open(RESPONSE_WAV, "rb") as f:
@@ -133,7 +143,7 @@ def get_reply_audio():
                     break
                 yield chunk
         print(">> Completed playback stream.")
-        yield b""  # explicitly signal EOF
+        yield b""  # explicitly mark end-of-stream
 
     response = Response(generate(), mimetype="audio/wav")
 
@@ -149,6 +159,7 @@ def get_reply_audio():
                     print(f">> Error removing {fpath}: {e}")
 
     return response
+
 
 
 
