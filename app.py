@@ -27,53 +27,40 @@ gemini_model = genai.GenerativeModel("gemini-2.5-flash")
 @app.route('/uploadAudio', methods=['POST'])
 def upload_audio():
     try:
-        print(">> [UPLOAD] Received audio upload.")
-
-        # Save uploaded audio
+        print(">> Received audio upload.")
         with open(WAV_FILE, 'wb') as f:
             f.write(request.data)
-        print(">> [UPLOAD] Saved WAV file.")
+        print(">> Saved WAV file.")
 
-        # Start background processing so we can reply immediately
-        threading.Thread(target=process_audio_and_generate_reply).start()
+        # Respond immediately so ESP32 knows upload succeeded
+        threading.Thread(target=process_audio).start()
 
-        # Immediate response to ESP32 — avoids long blocking
-        return jsonify({'status': 'processing'}), 202
+        return jsonify({
+            'status': 'processing',
+            'message': 'Audio received, processing in background...'
+        }), 200
 
     except Exception as e:
-        print(">> [ERROR] upload_audio:", e)
-        traceback.print_exc()
+        print(">> ERROR in upload_audio:", e)
         return jsonify({'error': str(e)}), 500
 
 
-def process_audio_and_generate_reply():
-    """Runs in background: transcribe, query Gemini, TTS, and export WAV."""
+def process_audio():
     try:
-        print(">> [THREAD] Starting background processing...")
-
-        # Step 1. Transcribe
+        print(">> Transcribing...")
         transcription = speech_to_text(WAV_FILE, lang='vi-VN')
-        print(f">> [THREAD] Transcription: {transcription}")
+        print(f">> Transcription done: {transcription}")
 
-        # Step 2. Query Gemini
         reply = query_gemini(transcription)
-        print(f">> [THREAD] Gemini reply: {reply}")
+        print(f">> Gemini reply: {reply}")
 
-        # Step 3. Convert reply to MP3
+        print(">> Generating speech...")
         text_to_speech(reply, RESPONSE_MP3)
-        print(">> [THREAD] gTTS done, converting to WAV...")
 
-        # Step 4. Convert MP3 → WAV
         AudioSegment.from_mp3(RESPONSE_MP3).export(RESPONSE_WAV, format="wav")
-        print(">> [THREAD] Conversion to WAV complete.")
-
-        print(">> [THREAD] Processing complete — ready for client fetch!")
-
+        print(">> Processing complete, response.wav ready.")
     except Exception as e:
-        print(">> [ERROR] process_audio_and_generate_reply:", e)
-        traceback.print_exc()
-
-
+        print(">> ERROR in process_audio:", e)
 
 def speech_to_text(file_name, lang):
     recognizer = sr.Recognizer()
@@ -113,35 +100,41 @@ def text_to_speech(text, filename):
 
 @app.route('/getReplyAudio')
 def get_reply_audio():
-    # Wait until response.wav is ready (up to 10 seconds)
-    wait_time = 0
-    max_wait = 10
-    while not os.path.exists(RESPONSE_WAV) and wait_time < max_wait:
-        print(f"Waiting for {RESPONSE_WAV}... {wait_time}s")
-        time.sleep(0.5)
-        wait_time += 0.5
+    max_wait = 10  # seconds
+    poll_interval = 0.5
+    waited = 0.0
+
+    print(f">> Client requested {RESPONSE_WAV}")
+    while not os.path.exists(RESPONSE_WAV) and waited < max_wait:
+        print(f"  Waiting... ({waited:.1f}s/{max_wait}s)")
+        time.sleep(poll_interval)
+        waited += poll_interval
 
     if not os.path.exists(RESPONSE_WAV):
-        print("Error: response.wav not found after waiting.")
+        print(">> Error: response.wav not found after waiting.")
         return jsonify({"error": "Audio file not ready"}), 404
 
-    def generate_and_cleanup():
-        try:
-            with open(RESPONSE_WAV, "rb") as f:
-                while chunk := f.read(8192):
-                    yield chunk
-        finally:
-            # Cleanup temporary files after streaming
-            for fpath in [RESPONSE_WAV, RESPONSE_MP3, WAV_FILE]:
-                if os.path.exists(fpath):
-                    try:
-                        os.remove(fpath)
-                        print(f"Removed: {fpath}")
-                    except Exception as e:
-                        print(f"Error removing {fpath}: {e}")
+    print(">> Streaming response.wav to client...")
 
-    print("Streaming response.wav to client...")
-    return Response(generate_and_cleanup(), mimetype="audio/wav")
+    def generate():
+        with open(RESPONSE_WAV, "rb") as f:
+            while chunk := f.read(8192):
+                yield chunk
+
+    response = Response(generate(), mimetype="audio/wav")
+
+    # Cleanup happens after streaming finishes
+    @response.call_on_close
+    def cleanup():
+        for fpath in [RESPONSE_WAV, RESPONSE_MP3, WAV_FILE]:
+            if os.path.exists(fpath):
+                try:
+                    os.remove(fpath)
+                    print(f">> Removed: {fpath}")
+                except Exception as e:
+                    print(f">> Error removing {fpath}: {e}")
+
+    return response
 
 
 if __name__ == '__main__':
