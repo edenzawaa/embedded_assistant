@@ -109,7 +109,7 @@ def text_to_speech(text, filename):
 
 @app.route('/getReplyAudio')
 def get_reply_audio():
-    max_wait = 10
+    max_wait = 10  # seconds
     poll_interval = 0.5
     waited = 0.0
 
@@ -127,22 +127,29 @@ def get_reply_audio():
 
     def generate():
         with open(RESPONSE_WAV, "rb") as f:
-            while chunk := f.read(8192):
+            while True:
+                chunk = f.read(8192)
+                if not chunk:
+                    break
                 yield chunk
+        print(">> Completed playback stream.")
+        yield b""  # explicitly signal EOF
 
     response = Response(generate(), mimetype="audio/wav")
 
     @response.call_on_close
     def cleanup():
+        print(">> Stream closed, cleaning up temporary files...")
         for fpath in [RESPONSE_WAV, RESPONSE_MP3, WAV_FILE]:
             if os.path.exists(fpath):
                 try:
                     os.remove(fpath)
-                    print(f">> Cleaned up {fpath}")
+                    print(f">> Removed: {fpath}")
                 except Exception as e:
                     print(f">> Error removing {fpath}: {e}")
 
     return response
+
 
 
 if __name__ == '__main__':
