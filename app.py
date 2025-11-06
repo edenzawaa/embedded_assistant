@@ -5,6 +5,7 @@ from pydub import AudioSegment
 import google.generativeai as genai
 from dotenv import load_dotenv
 import warnings
+import threading
 
 warnings.filterwarnings("ignore", category=SyntaxWarning)
 
@@ -18,6 +19,7 @@ genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 model = genai.GenerativeModel("gemini-2.5-flash")
 
 # --- GLOBAL STATUS FLAGS ---
+status_lock = threading.Lock()
 status = {"processing": False, "ready": False, "error": None}
 
 
@@ -33,7 +35,9 @@ def upload_audio():
         with open(WAV_FILE, "wb") as f:
             f.write(data)
         
-        status = {"processing": True, "ready": False, "error": None}
+        with status_lock:
+            status.update({"processing": True, "ready": False, "error": None})
+
         threading.Thread(target=process_audio, daemon=True).start()
         return jsonify({"status": "processing"}), 200
 
@@ -45,7 +49,8 @@ def upload_audio():
 
 @app.route("/checkStatus", methods=["GET"])
 def check_status():
-    return jsonify(status)
+    with status_lock:
+        return jsonify(dict(status))
 
 
 @app.route("/getReplyAudio", methods=["GET"])
@@ -69,7 +74,9 @@ def get_reply_audio():
                 if os.path.exists(fpath):
                     os.remove(fpath)
                     print(f">> Removed: {fpath}")
-            status.update({"processing": False, "ready": False, "error": None})
+            with status_lock:
+                status.update({"processing": False, "ready": False, "error": None})
+
 
         return response
 
@@ -103,12 +110,13 @@ def process_audio():
         os.remove(tts_mp3)
 
         # Update status
-        status.update({"processing": False, "ready": True, "error": None})
-        print(">> Processing complete. WAV ready.")
+        with status_lock:
+            status.update({"processing": False, "ready": True, "error": None})
+            print(">> Processing complete. WAV ready.")
 
     except Exception as e:
-        status.update({"processing": False, "ready": False, "error": str(e)})
-        print(">> ERROR in process_audio:", e)
+        with status_lock:
+            status.update({"processing": False, "ready": False, "error": str(e)})
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
