@@ -109,7 +109,8 @@ def process_audio():
         # Generate MP3 first, then convert to WAV
         tts_mp3 = "temp_response.mp3"
         gTTS(reply_text, lang="vi").save(tts_mp3)
-        AudioSegment.from_mp3(tts_mp3).export(RESPONSE_WAV, format="wav")
+        AudioSegment.from_mp3(tts_mp3).set_frame_rate(16000).set_channels(1).export(RESPONSE_WAV, format="wav")
+
         os.remove(tts_mp3)
 
         # Update status safely
